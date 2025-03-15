@@ -13,11 +13,10 @@
 
 Система представляет собой гибридное решение, включающее:
 
+
 - Фронтенд: Next.js, Shadcn/UI, TailwindCSS
-- Бэкенд API: Flask/Python, JWT
-- Автоматизация: n8n
-- База данных: PostgreSQL, Redis
-- Аналитический движок: Python, Pandas, NumPy, Scikit-learn
+- Бэкенд API: Flask/Python с интегрированным аналитическим движком
+- База данных: PostgreSQL
 
 ## Разработка
 

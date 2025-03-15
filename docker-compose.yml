@@ -1,0 +1,57 @@
+version: '3.8'
+
+services:
+  frontend:
+    build:
+      context: .
+      dockerfile: infrastructure/docker/frontend/Dockerfile
+    ports:
+      - "3000:3000"
+    environment:
+      - NEXT_PUBLIC_API_URL=http://localhost:5000/api
+    volumes:
+      - ./frontend:/app
+      - /app/node_modules
+      - /app/.next
+    depends_on:
+      - backend
+    networks:
+      - price-elastic-network
+
+  backend:
+    build:
+      context: .
+      dockerfile: infrastructure/docker/backend/Dockerfile
+    ports:
+      - "5000:5000"
+    environment:
+      - FLASK_APP=wsgi.py
+      - FLASK_ENV=development
+      - DATABASE_URL=postgresql://postgres:postgres@db:5432/price_elastic
+      - SECRET_KEY=development_secret_key
+    volumes:
+      - ./backend:/app
+    depends_on:
+      - db
+    networks:
+      - price-elastic-network
+
+  db:
+    image: postgres:14-alpine
+    ports:
+      - "5432:5432"
+    environment:
+      - POSTGRES_USER=postgres
+      - POSTGRES_PASSWORD=postgres
+      - POSTGRES_DB=price_elastic
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    networks:
+      - price-elastic-network
+
+networks:
+  price-elastic-network:
+    driver: bridge
+
+volumes:
+  postgres_data:
