@@ -17,7 +17,7 @@ export default function RootLayout({
   children: React.ReactNode
 }) {
   return (
-    <html lang="en" suppressHydrationWarning>
+    <html lang="en" suppressHydrationWarning className="scrollbar-custom">
       <body className={inter.className}>
         <ThemeProvider
           attribute="class"
@@ -25,13 +25,13 @@ export default function RootLayout({
           enableSystem
           disableTransitionOnChange
         >
-          <div className="relative flex min-h-screen flex-col">
+          <div className="relative flex min-h-screen flex-col bg-background">
             <Nav />
-            <div className="flex-1">
-              <div className="container py-6">
+            <main className="flex-1 pt-14">
+              <div className="container mx-auto px-4 sm:px-6 lg:px-8 py-8">
                 {children}
               </div>
-            </div>
+            </main>
           </div>
         </ThemeProvider>
       </body>
