@@ -1,5 +1,6 @@
 import os
 from datetime import datetime
+import json
 import pandas as pd
 from flask import request, jsonify, current_app
 from flask_jwt_extended import jwt_required, get_jwt_identity
@@ -7,7 +8,8 @@ from werkzeug.utils import secure_filename
 
 from app import db
 from app.api import api
-from app.models import User, DataSource, Subscription
+from app.models import User, DataSource, Subscription, Analysis
+from app.models.data_source import DataSource
 from app.api.data.utils import get_plan_limits, save_uploaded_file
 
 ALLOWED_EXTENSIONS = {'csv', 'xlsx', 'xls'}
@@ -158,7 +160,7 @@ def create_data_source():
     # Маппинг колонок (если предоставлен)
     column_mapping = request.form.get('column_mapping')
     if column_mapping:
-        data_source.column_mapping = column_mapping
+        data_source.mapping = json.loads(column_mapping)
     
     db.session.add(data_source)
     db.session.commit()
@@ -191,7 +193,7 @@ def update_data_source(source_id):
     
     # Обновляем маппинг колонок
     if 'column_mapping' in data:
-        data_source.column_mapping = data['column_mapping']
+        data_source.mapping = data['column_mapping']
     
     # Обновляем файл, если загружен новый
     if data_source.source_type == 'file' and 'file' in request.files:
@@ -261,3 +263,169 @@ def delete_data_source(source_id):
     return jsonify({
         'message': 'Источник данных успешно удален'
     }), 200
+
+# Тестовые эндпоинты без JWT для отладки
+
+@api.route('/data/sources-test', methods=['GET'])
+def get_data_sources_test():
+    # Используем фиксированный ID пользователя
+    user_id = 1
+    user = User.query.get(user_id)
+    
+    if not user:
+        return jsonify({'message': 'Пользователь не найден'}), 404
+    
+    # Получаем все источники данных компании
+    data_sources = DataSource.query.filter_by(company_id=user.company_id).all()
+    
+    return jsonify({
+        'data_sources': [ds.to_dict() for ds in data_sources]
+    }), 200
+
+@api.route('/data/sources-test', methods=['POST'])
+def create_data_source_test_v2():
+    # Используем фиксированный ID пользователя
+    user_id = 1
+    user = User.query.get(user_id)
+    
+    if not user:
+        return jsonify({'message': 'Пользователь не найден'}), 404
+    
+    data = request.get_json()
+    if not data:
+        return jsonify({'message': 'Отсутствуют данные'}), 400
+    
+    # Создаем новый источник данных
+    data_source = DataSource(
+        user_id=user.id,
+        company_id=user.company_id,
+        name=data.get('name', 'Новый источник данных'),
+        source_type=data.get('source_type', 'manual')
+    )
+    
+    # Используем правильный сеттер для словаря
+    if 'column_mapping' in data:
+        data_source.mapping = data.get('column_mapping')
+    else:
+        data_source.mapping = {}
+    
+    db.session.add(data_source)
+    db.session.commit()
+    
+    return jsonify({
+        'message': 'Источник данных успешно создан',
+        'data_source': data_source.to_dict()
+    }), 201
+
+@api.route('/data/upload-test', methods=['POST'])
+def upload_file_test():
+    # Используем фиксированный ID пользователя
+    user_id = 1
+    user = User.query.get(user_id)
+    
+    if not user:
+        return jsonify({'message': 'Пользователь не найден'}), 404
+    
+    # Проверяем, был ли файл в запросе
+    if 'file' not in request.files:
+        return jsonify({'message': 'Файл не найден в запросе'}), 400
+    
+    file = request.files['file']
+    if file.filename == '':
+        return jsonify({'message': 'Файл не выбран'}), 400
+    
+    if not allowed_file(file.filename):
+        return jsonify({'message': 'Недопустимый тип файла. Разрешены только CSV и Excel файлы'}), 400
+    
+    try:
+        # Чтение файла для определения количества строк
+        if file.filename.endswith('.csv'):
+            df = pd.read_csv(file)
+            file.seek(0)  # Сбросить позицию чтения файла
+        else:  # Excel
+            df = pd.read_excel(file)
+            file.seek(0)  # Сбросить позицию чтения файла
+        
+        # Сохраняем файл
+        filename = secure_filename(file.filename)
+        file_path = save_uploaded_file(file, filename, user.company_id)
+        
+        # Создаем новый источник данных
+        data_source = DataSource(
+            user_id=user.id,
+            company_id=user.company_id,
+            name=request.form.get('name', file.filename),
+            source_type='file',
+            file_path=file_path,
+            row_count=len(df)
+        )
+        
+        # Автоматическое определение маппинга колонок
+        if 'column_mapping' in request.form:
+            data_source.mapping = json.loads(request.form.get('column_mapping'))
+        else:
+            # Простой маппинг: имя колонки -> имя колонки
+            mapping = {col: col for col in df.columns}
+            data_source.mapping = mapping
+        
+        db.session.add(data_source)
+        db.session.commit()
+        
+        return jsonify({
+            'message': 'Файл успешно загружен',
+            'data_source': data_source.to_dict(),
+            'columns': list(df.columns),
+            'row_count': len(df)
+        }), 201
+        
+    except Exception as e:
+        return jsonify({'message': f'Ошибка обработки файла: {str(e)}'}), 500
+
+@api.route('/data/sources-test/<int:source_id>', methods=['GET'])
+def get_data_source_test(source_id):
+    # Находим источник данных
+    data_source = DataSource.query.get(source_id)
+    
+    if not data_source:
+        return jsonify({'message': 'Источник данных не найден'}), 404
+    
+    # Определяем путь к файлу
+    if data_source.source_type == 'file' and data_source.file_path:
+        try:
+            # Чтение CSV или Excel файла
+            file_path = os.path.join(current_app.config['UPLOAD_FOLDER'], data_source.file_path)
+            
+            if file_path.endswith('.csv'):
+                df = pd.read_csv(file_path)
+            else:  # Excel
+                df = pd.read_excel(file_path)
+            
+            # Ограничиваем количество строк для предпросмотра
+            preview_rows = min(100, len(df))
+            
+            return jsonify({
+                'data_source': data_source.to_dict(),
+                'preview': df.head(preview_rows).to_dict(orient='records'),
+                'columns': list(df.columns),
+                'row_count': len(df)
+            }), 200
+        
+        except Exception as e:
+            return jsonify({
+                'message': f'Ошибка чтения файла: {str(e)}',
+                'data_source': data_source.to_dict()
+            }), 500
+    
+    # Для других типов источников
+    return jsonify({
+        'data_source': data_source.to_dict(),
+        'message': 'Предпросмотр данных недоступен для этого типа источника'
+    }), 200
+
+# Утилиты для модуля data
+
+@api.route('/data/utils/plan-limits', methods=['GET'])
+def get_plan_limits_endpoint():
+    plan_type = request.args.get('plan_type', 'free')
+    limits = get_plan_limits(plan_type)
+    return jsonify(limits), 200
