@@ -2,13 +2,47 @@ from datetime import datetime
 from flask import request, jsonify, current_app
 from flask_jwt_extended import (
     create_access_token, create_refresh_token, jwt_required, 
-    get_jwt_identity, get_jwt
+    get_jwt_identity, get_jwt, verify_jwt_in_request
 )
+import traceback
 
 from app import db, jwt
 from app.api import api
 from app.models import User, Company, Subscription
 from app.api.auth.utils import admin_required
+
+# Вспомогательная функция для отладки JWT
+def debug_jwt_required():
+    def wrapper(fn):
+        def decorator(*args, **kwargs):
+            try:
+                auth_header = request.headers.get('Authorization', '')
+                current_app.logger.debug(f"Auth header: {auth_header}")
+                
+                if not auth_header:
+                    return jsonify({'message': 'Отсутствует заголовок Authorization'}), 401
+                
+                # Пытаемся вручную проверить токен
+                parts = auth_header.split()
+                if len(parts) != 2 or parts[0] != 'Bearer':
+                    return jsonify({'message': f'Неверный формат заголовка: {auth_header}'}), 401
+                
+                token = parts[1]
+                current_app.logger.debug(f"Extracted token: {token[:20]}...")
+                
+                # Стандартная проверка JWT
+                verify_jwt_in_request()
+                return fn(*args, **kwargs)
+            except Exception as e:
+                current_app.logger.error(f"JWT verification error: {str(e)}")
+                traceback.print_exc()
+                return jsonify({
+                    'message': 'Ошибка проверки токена', 
+                    'error': 'invalid_token',
+                    'details': str(e)
+                }), 401
+        return decorator
+    return wrapper
 
 @api.route('/auth/register', methods=['POST'])
 def register():
@@ -56,6 +90,9 @@ def register():
     access_token = create_access_token(identity=user.id)
     refresh_token = create_refresh_token(identity=user.id)
     
+    # Для отладки
+    current_app.logger.debug(f"Created access token: {access_token[:20]}...")
+    
     return jsonify({
         'message': 'Пользователь успешно зарегистрирован',
         'access_token': access_token,
@@ -89,6 +126,10 @@ def login():
     access_token = create_access_token(identity=user.id)
     refresh_token = create_refresh_token(identity=user.id)
     
+    # Для отладки
+    current_app.logger.debug(f"Created access token: {access_token[:20]}...")
+    current_app.logger.debug(f"JWT secret key: {current_app.config.get('JWT_SECRET_KEY')[:5]}...")
+    
     return jsonify({
         'message': 'Вход выполнен успешно',
         'access_token': access_token,
@@ -97,7 +138,7 @@ def login():
     }), 200
 
 @api.route('/auth/refresh', methods=['POST'])
-@jwt_required(refresh=True)
+@debug_jwt_required()
 def refresh():
     current_user_id = get_jwt_identity()
     access_token = create_access_token(identity=current_user_id)
@@ -106,22 +147,37 @@ def refresh():
         'access_token': access_token
     }), 200
 
-@api.route('/auth/me', methods=['GET'])
-@jwt_required()
-def get_user_info():
-    current_user_id = get_jwt_identity()
-    user = User.query.get(current_user_id)
-    
-    if not user:
-        return jsonify({'message': 'Пользователь не найден'}), 404
-    
+# Добавим тестовый эндпоинт без JWT для проверки
+@api.route('/test', methods=['GET'])
+def test_endpoint():
     return jsonify({
-        'user': user.to_dict(),
-        'company': user.company.to_dict() if user.company else None
+        'message': 'Тестовый эндпоинт работает!',
+        'headers': dict(request.headers)
     }), 200
 
+@api.route('/auth/me', methods=['GET'])
+@debug_jwt_required()
+def get_user_info():
+    try:
+        current_user_id = get_jwt_identity()
+        current_app.logger.debug(f"User ID from JWT: {current_user_id}")
+        
+        user = User.query.get(current_user_id)
+        
+        if not user:
+            return jsonify({'message': 'Пользователь не найден'}), 404
+        
+        return jsonify({
+            'user': user.to_dict(),
+            'company': user.company.to_dict() if user.company else None
+        }), 200
+    except Exception as e:
+        current_app.logger.error(f"Error in get_user_info: {str(e)}")
+        traceback.print_exc()
+        return jsonify({'message': f'Ошибка: {str(e)}'}), 500
+
 @api.route('/auth/me', methods=['PUT'])
-@jwt_required()
+@debug_jwt_required()
 def update_user_info():
     current_user_id = get_jwt_identity()
     user = User.query.get(current_user_id)
@@ -147,7 +203,7 @@ def update_user_info():
     }), 200
 
 @api.route('/auth/password', methods=['PUT'])
-@jwt_required()
+@debug_jwt_required()
 def change_password():
     current_user_id = get_jwt_identity()
     user = User.query.get(current_user_id)
@@ -171,7 +227,7 @@ def change_password():
     return jsonify({'message': 'Пароль успешно изменен'}), 200
 
 @api.route('/auth/users', methods=['GET'])
-@jwt_required()
+@debug_jwt_required()
 @admin_required
 def get_company_users():
     current_user_id = get_jwt_identity()
@@ -184,7 +240,7 @@ def get_company_users():
     }), 200
 
 @api.route('/auth/users', methods=['POST'])
-@jwt_required()
+@debug_jwt_required()
 @admin_required
 def add_company_user():
     current_user_id = get_jwt_identity()
@@ -225,6 +281,7 @@ def add_company_user():
 # Обработчик истечения токена
 @jwt.expired_token_loader
 def expired_token_callback(jwt_header, jwt_payload):
+    current_app.logger.debug(f"Token expired: {jwt_payload}")
     return jsonify({
         'message': 'Токен истек',
         'error': 'token_expired'
@@ -233,7 +290,19 @@ def expired_token_callback(jwt_header, jwt_payload):
 # Обработчик невалидного токена
 @jwt.invalid_token_loader
 def invalid_token_callback(error):
+    current_app.logger.debug(f"Invalid token: {error}")
     return jsonify({
         'message': 'Недействительный токен',
-        'error': 'invalid_token'
+        'error': 'invalid_token',
+        'details': str(error)
+    }), 401
+
+# Добавим обработчик отсутствующего токена
+@jwt.unauthorized_loader
+def missing_token_callback(error):
+    current_app.logger.debug(f"Missing token: {error}")
+    return jsonify({
+        'message': 'Отсутствует токен авторизации',
+        'error': 'missing_token',
+        'details': str(error)
     }), 401
