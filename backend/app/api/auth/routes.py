@@ -180,7 +180,7 @@ def get_user_info():
         current_user_id = get_jwt_identity()
         current_app.logger.debug(f"User ID from JWT: {current_user_id}")
         
-        user = User.query.get(current_user_id)
+        user = User.query.get(int(current_user_id))
         
         if not user:
             return jsonify({'message': 'Пользователь не найден'}), 404

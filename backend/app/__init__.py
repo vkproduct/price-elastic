@@ -1,15 +1,7 @@
 from flask import Flask
-from flask_sqlalchemy import SQLAlchemy
-from flask_migrate import Migrate
-from flask_jwt_extended import JWTManager
-from flask_cors import CORS
-import os
-
 from config import config
-
-db = SQLAlchemy()
-migrate = Migrate()
-jwt = JWTManager()
+from app.extensions import db, migrate, jwt, cors
+from app.models.user import User
 
 def create_app(config_name='default'):
     app = Flask(__name__)
@@ -27,7 +19,7 @@ def create_app(config_name='default'):
     db.init_app(app)
     migrate.init_app(app, db)
     jwt.init_app(app)
-    CORS(app)
+    cors.init_app(app)
     
     # Обработчики JWT ошибок
     @jwt.expired_token_loader
@@ -44,6 +36,15 @@ def create_app(config_name='default'):
     def missing_token_callback(error):
         app.logger.debug(f"Missing token error: {error}")
         return {"message": "Отсутствует токен авторизации", "error": "missing_token"}, 401
+    
+    @jwt.user_identity_loader
+    def user_identity_lookup(user):
+        return str(user)  # Преобразуем ID в строку
+
+    @jwt.user_lookup_loader
+    def user_lookup_callback(_jwt_header, jwt_data):
+        identity = jwt_data["sub"]
+        return User.query.filter_by(id=int(identity)).one_or_none()
     
     # Регистрация API blueprints
     from app.api import api as api_blueprint

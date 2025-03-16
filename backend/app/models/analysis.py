@@ -1,6 +1,6 @@
 from datetime import datetime
 import json
-from app import db
+from app.extensions import db
 
 class Analysis(db.Model):
     __tablename__ = 'analyses'
